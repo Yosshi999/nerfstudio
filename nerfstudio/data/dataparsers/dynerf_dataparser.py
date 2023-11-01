@@ -45,11 +45,12 @@ class DyNeRF(DataParser):
 
     def process_frames(self, camera_id: int) -> List[Path]:
         """Read video and extract frames."""
-        video_path = self.data / f"cam{camera_id:02d}.mp4"
-        out_folder = self.data / f"x{self.downscale_factor}" / f"cam{camera_id:02d}"
+        camera_name = self.camera_names[camera_id]
+        video_path = self.data / f"{camera_name}.mp4"
+        out_folder = self.data / f"x{self.downscale_factor}" / camera_name
         if not out_folder.exists():
             CONSOLE.print(f"Downscale {video_path} to {out_folder}")
-            cap = cv2.VideoCapture(video_path)
+            cap = cv2.VideoCapture(str(video_path))
             assert cap.isOpened(), f"Unable to open {video_path}"
 
             out_folder.mkdir(parents=True)
@@ -70,7 +71,7 @@ class DyNeRF(DataParser):
             split: str = "train",
     ) -> DataparserOutputs:
         # load poses
-        poses_bounds = np.load(self.data / "poses_bounds.npy")
+        poses_bounds = np.load(self.data / "poses_bounds.npy").astype(np.float32)
         poses_hwf = poses_bounds[:, :15].reshape(-1, 3, 5)  # (num_cameras, 3, 5)
         heights = poses_hwf[:, 0, -1] / self.downscale_factor
         widths = poses_hwf[:, 1, -1] / self.downscale_factor
@@ -80,11 +81,9 @@ class DyNeRF(DataParser):
         # down-right-back (LLFF) => right-up-back
         poses = np.concatenate([poses[..., 1:2], -poses[..., 0:1], poses[..., 2:4]], axis=-1)
 
+        self.camera_names: List[str] = sorted(map(lambda x: x.stem, self.data.glob("*.mp4")))
         if split == "train":
             camera_ids = np.arange(1, poses.shape[0])
-            if "coffee_martini" in str(self.data):
-                # camera-12 in coffee_martini is unsynchronized
-                camera_ids = np.setdiff1d(camera_ids, 12)
         elif split in ["val", "test"]:
             camera_ids = np.array([0])  # use camera-0 for testing
         else:
@@ -92,7 +91,7 @@ class DyNeRF(DataParser):
 
         # load images
         _image_paths = [self.process_frames(i) for i in camera_ids]  # (num_cameras, num_frames)
-        aligned_image_paths: List[List[Path]] = list(zip(*_image_paths))  # (num_frames, num_cameras)
+        aligned_image_paths: List[List[Path]] = [list(tup) for tup in zip(*_image_paths)]  # (num_frames, num_cameras)
         num_frames = len(aligned_image_paths)
         num_cameras = len(aligned_image_paths[0])
         CONSOLE.print(f"Loaded {num_frames} frames x {num_cameras} cameras")
@@ -103,22 +102,20 @@ class DyNeRF(DataParser):
             fy=torch.tensor(focal[None, camera_ids, None]).expand(num_frames, num_cameras, 1),
             cx=torch.tensor(widths[None, camera_ids, None]).expand(num_frames, num_cameras, 1) / 2,
             cy=torch.tensor(heights[None, camera_ids, None]).expand(num_frames, num_cameras, 1) / 2,
-            width=torch.tensor(widths[None, camera_ids, None]).expand(num_frames, num_cameras, 1),
-            height=torch.tensor(heights[None, camera_ids, None]).expand(num_frames, num_cameras, 1),
+            width=torch.tensor(widths[None, camera_ids, None]).expand(num_frames, num_cameras, 1).long(),
+            height=torch.tensor(heights[None, camera_ids, None]).expand(num_frames, num_cameras, 1).long(),
             camera_type=CameraType.PERSPECTIVE,
             times=torch.linspace(0, 1, num_frames)[:, None, None].expand(num_frames, num_cameras, 1),
         )
         assert cameras.shape == (num_frames, num_cameras)
-        if split in ["val", "test"]:
-            cameras = cameras.flatten()
+        cameras = cameras.flatten()
 
         return DataparserOutputs(
             image_filenames=sum(aligned_image_paths, []),  # Flatten to List[Path]
             cameras=cameras,
             metadata=dict(
                 camera_ids=camera_ids,
-                heights=heights[camera_ids],
-                widths=widths[camera_ids]
+                shape_before_flatten=(num_frames, num_cameras),
             )
         )
     
@@ -129,24 +126,25 @@ class DyNeRF(DataParser):
             isg_gamma: float = 2e-2,
             precompute_device: Union[torch.device, str] = "cpu",
     ):
-        num_frames, num_cameras = dataparser_outputs.cameras.shape
-        heights = dataparser_outputs.cameras.height[0, :, 0]  # select first-frame for each cameras
-        widths = dataparser_outputs.cameras.width[0, :, 0]  # select first-frame for each cameras
+        num_frames, num_cameras = dataparser_outputs.metadata["shape_before_flatten"]
+        heights = dataparser_outputs.cameras.height[:num_cameras, 0]  # select first-frame for each cameras
+        widths = dataparser_outputs.cameras.width[:num_cameras, 0]  # select first-frame for each cameras
         aligned_image_paths = np.array(dataparser_outputs.image_filenames).reshape(num_frames, num_cameras)
 
         compute_isg = False
         if isg_cache.exists():
             CONSOLE.print(f"ISG cache found: {isg_cache}")
             with h5py.File(isg_cache) as f:
-                if f["gamma"] != isg_gamma:
-                    CONSOLE.print("Mismatched ISG gamma. Needs re-compute ISG")
+                saved_gamma = f.attrs.get("gamma", None)
+                if saved_gamma != isg_gamma:
+                    CONSOLE.print(f"Mismatched ISG gamma ({saved_gamma}). Needs re-compute ISG")
                     compute_isg = True
         else:
             compute_isg = True
         if compute_isg:
             CONSOLE.print("Computing ISG. It may take much memory...")
             with h5py.File(isg_cache, "w") as f:
-                f.create_dataset("gamma", data=isg_gamma)
+                f.attrs["gamma"] = isg_gamma
                 g = f.create_group("weights")
                 for i in range(num_cameras):
                     height = int(heights[i])
@@ -154,10 +152,10 @@ class DyNeRF(DataParser):
                     CONSOLE.print(f"Computing ISG of {aligned_image_paths[0, i].parent}")
                     imgs = torch.empty((num_frames, height, width, 3), dtype=torch.float32)
                     for j in range(num_frames):
-                        imgs[j] = cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.
+                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.)
                     imgs = imgs.to(precompute_device)
 
-                    diffsq = (imgs - torch.median(imgs, dim=0)).square()
+                    diffsq = (imgs - torch.median(imgs, dim=0).values).square()
                     psi = diffsq / (diffsq + isg_gamma ** 2)
                     isg_weights = psi.abs().sum(-1) / 3  # (num_frames, height, width)
                     g.create_dataset(str(i), data=isg_weights.cpu().numpy(), chunks=(1, height, width))
@@ -170,25 +168,27 @@ class DyNeRF(DataParser):
             ist_shift: int = 25,
             precompute_device: Union[torch.device, str] = "cpu"
     ):
-        num_frames, num_cameras = dataparser_outputs.cameras.shape
-        heights = dataparser_outputs.metadata["heights"]
-        widths = dataparser_outputs.metadata["widths"]
+        num_frames, num_cameras = dataparser_outputs.metadata["shape_before_flatten"]
+        heights = dataparser_outputs.cameras.height[:num_cameras, 0]  # select first-frame for each cameras
+        widths = dataparser_outputs.cameras.width[:num_cameras, 0]  # select first-frame for each cameras
         aligned_image_paths = np.array(dataparser_outputs.image_filenames).reshape(num_frames, num_cameras)
 
         compute_ist = False
         if ist_cache.exists():
             CONSOLE.print(f"IST cache found: {ist_cache}")
             with h5py.File(ist_cache) as f:
-                if f["alpha"] != ist_alpha or f["shift"] != ist_shift:
-                    CONSOLE.print("Mismatched IST hyperparams. Needs re-compute IST")
+                saved_alpha = f.attrs.get("alpha", None)
+                saved_shift = f.attrs.get("shift", None)
+                if saved_alpha != ist_alpha or saved_shift != ist_shift:
+                    CONSOLE.print(f"Mismatched IST hyperparams (alpha={saved_alpha}, shift={saved_shift}). Needs re-compute IST")
                     compute_ist = True
         else:
             compute_ist = True
         if compute_ist:
             CONSOLE.print("Computing IST. It may take much memory...")
             with h5py.File(ist_cache, "w") as f:
-                f.create_dataset("alpha", data=ist_alpha)
-                f.create_dataset("shift", data=ist_shift)
+                f.attrs["alpha"] = ist_alpha
+                f.attrs["shift"] = ist_shift
                 g = f.create_group("weights")
                 for i in range(num_cameras):
                     height = int(heights[i])
@@ -196,7 +196,7 @@ class DyNeRF(DataParser):
                     CONSOLE.print(f"Computing IST of {aligned_image_paths[0,i].parent}")
                     imgs = torch.empty((num_frames, height, width, 3), dtype=torch.float32)
                     for j in range(num_frames):
-                        imgs[j] = cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.
+                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.)
                     imgs = imgs.to(precompute_device)
 
                     max_diff = torch.zeros_like(imgs[0])

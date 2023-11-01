@@ -155,10 +155,11 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
             self.dataparser.downscale_factor = 1
         self.includes_time = self.dataparser.includes_time
         if test_mode != "inference":  # Avoid opening images in inference
-            self.train_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split="train", load_every=load_every)
+            self.train_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split="train")
             self.eval_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split=self.test_split)
-            camera_heights = self.train_dataparser_outputs.cameras.height[0, :, 0]
-            camera_widths = self.train_dataparser_outputs.cameras.width[0, :, 0]
+            self.train_num_frames, self.train_num_cameras = self.train_dataparser_outputs.metadata["shape_before_flatten"]
+            camera_heights = self.train_dataparser_outputs.cameras.height[:self.train_num_cameras, 0]
+            camera_widths = self.train_dataparser_outputs.cameras.width[:self.train_num_cameras, 0]
             if len(camera_heights) > 1:
                 for height, width in zip(camera_heights[1:], camera_widths[1:]):
                     if camera_heights[0] != height or camera_widths[0] != width:
@@ -184,6 +185,7 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
             if self.config.ist_step >= 0:
                 self.dataparser.precompute_ist(self.ist_cache, self.train_dataparser_outputs, self.config.ist_alpha, self.config.ist_shift, self.config.precompute_device)
                 self.ist_cache_f = h5py.File(self.ist_cache)
+        super().__init__()
 
     def create_train_dataset(self) -> TDataset:
         """Sets up the data loaders for training"""
@@ -214,7 +216,6 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
         """Sets up the data loaders for training"""
         assert self.train_dataset is not None
         CONSOLE.print("Setting up training dataset...")
-        self.train_num_frames, self.train_num_cameras = self.train_dataparser_outputs.cameras.shape
         self.train_image_dataloader = VideoDataloader(
             self.train_dataset,
             self.train_num_frames,
@@ -269,31 +270,25 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
         assert self.train_pixel_sampler is not None
         assert isinstance(image_batch, dict)
         frame_idx = image_batch["frame_idx"]
+        # TODO: support importance weights for camera_res_scale_factor < 1.0
         if self.importance_mode == "isg":
-            importance_weights = []
+            importance_weights = torch.empty(self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2])
             for camera in range(self.train_num_cameras):
-                importance_weights.append(self.isg_cache_f[f"weights/{camera}"][frame_idx])
+                importance_weights[camera] = torch.from_numpy(self.isg_cache_f[f"weights/{camera}"][frame_idx])
             importance_weights = torch.tensor(importance_weights)
             importance_weights /= importance_weights.sum()
             image_batch["importance"] = importance_weights
         elif self.importance_mode == "isg":
-            importance_weights = []
+            importance_weights = torch.empty(self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2])
             for camera in range(self.train_num_cameras):
-                importance_weights.append(self.ist_cache_f[f"weights/{camera}"][frame_idx])
+                importance_weights[camera] = torch.from_numpy(self.ist_cache_f[f"weights/{camera}"][frame_idx])
             importance_weights = torch.tensor(importance_weights)
             importance_weights /= importance_weights.sum()
             image_batch["importance"] = importance_weights
+        del image_batch["frame_idx"]
         batch = self.train_pixel_sampler.sample(image_batch)
         ray_indices = batch["indices"]
-        # List of flattened index -> List of tuple[num_frames, num_cameras]
-        c = ray_indices[:, 0]  # flattened camera indices
-        y = ray_indices[:, 1]  # row indices
-        x = ray_indices[:, 2]  # col indices
-        coords = self.train_ray_generator.image_coords[y, x]
-        ray_bundle = self.train_dataparser_outputs.cameras.generate_rays(
-            camera_indices=torch.stack([c // self.train_num_cameras, c % self.train_num_cameras], dim=-1),
-            coords=coords,
-        )
+        ray_bundle = self.train_ray_generator(ray_indices)
         return ray_bundle, batch
 
     def next_eval(self, step: int) -> Tuple[RayBundle, Dict]:
