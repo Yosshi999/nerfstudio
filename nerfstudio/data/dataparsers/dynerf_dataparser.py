@@ -80,6 +80,7 @@ class DyNeRF(DataParser):
         # switch axis (https://docs.nerf.studio/quickstart/data_conventions.html)
         # down-right-back (LLFF) => right-up-back
         poses = np.concatenate([poses[..., 1:2], -poses[..., 0:1], poses[..., 2:4]], axis=-1)
+        poses[..., 3] /= 5.0
 
         self.camera_names: List[str] = sorted(map(lambda x: x.stem, self.data.glob("*.mp4")))
         if split == "train":
