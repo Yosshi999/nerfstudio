@@ -11,9 +11,7 @@ import numpy as np
 import torch
 
 from nerfstudio.cameras.cameras import Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (DataParser,
-                                                         DataParserConfig,
-                                                         DataparserOutputs)
+from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
 from nerfstudio.utils.rich_utils import CONSOLE
 
 
@@ -67,8 +65,8 @@ class DyNeRF(DataParser):
         return [out_folder / f"{i:05d}.png" for i in range(0, all_frames, self.load_every)]
 
     def _generate_dataparser_outputs(
-            self,
-            split: str = "train",
+        self,
+        split: str = "train",
     ) -> DataparserOutputs:
         # load poses
         poses_bounds = np.load(self.data / "poses_bounds.npy").astype(np.float32)
@@ -117,15 +115,15 @@ class DyNeRF(DataParser):
             metadata=dict(
                 camera_ids=camera_ids,
                 shape_before_flatten=(num_frames, num_cameras),
-            )
+            ),
         )
-    
+
     def precompute_isg(
-            self,
-            isg_cache: Path,
-            dataparser_outputs: DataparserOutputs,
-            isg_gamma: float = 2e-2,
-            precompute_device: Union[torch.device, str] = "cpu",
+        self,
+        isg_cache: Path,
+        dataparser_outputs: DataparserOutputs,
+        isg_gamma: float = 2e-2,
+        precompute_device: Union[torch.device, str] = "cpu",
     ):
         num_frames, num_cameras = dataparser_outputs.metadata["shape_before_flatten"]
         heights = dataparser_outputs.cameras.height[:num_cameras, 0]  # select first-frame for each cameras
@@ -153,21 +151,21 @@ class DyNeRF(DataParser):
                     CONSOLE.print(f"Computing ISG of {aligned_image_paths[0, i].parent}")
                     imgs = torch.empty((num_frames, height, width, 3), dtype=torch.float32)
                     for j in range(num_frames):
-                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.)
+                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j, i])).astype(np.float32) / 255.0)
                     imgs = imgs.to(precompute_device)
 
                     diffsq = (imgs - torch.median(imgs, dim=0).values).square()
-                    psi = diffsq / (diffsq + isg_gamma ** 2)
+                    psi = diffsq / (diffsq + isg_gamma**2)
                     isg_weights = psi.abs().sum(-1) / 3  # (num_frames, height, width)
                     g.create_dataset(str(i), data=isg_weights.cpu().numpy(), chunks=(1, height, width))
 
     def precompute_ist(
-            self,
-            ist_cache: Path,
-            dataparser_outputs: DataparserOutputs,
-            ist_alpha: float = 0.1,
-            ist_shift: int = 25,
-            precompute_device: Union[torch.device, str] = "cpu"
+        self,
+        ist_cache: Path,
+        dataparser_outputs: DataparserOutputs,
+        ist_alpha: float = 0.1,
+        ist_shift: int = 25,
+        precompute_device: Union[torch.device, str] = "cpu",
     ):
         num_frames, num_cameras = dataparser_outputs.metadata["shape_before_flatten"]
         heights = dataparser_outputs.cameras.height[:num_cameras, 0]  # select first-frame for each cameras
@@ -181,7 +179,9 @@ class DyNeRF(DataParser):
                 saved_alpha = f.attrs.get("alpha", None)
                 saved_shift = f.attrs.get("shift", None)
                 if saved_alpha != ist_alpha or saved_shift != ist_shift:
-                    CONSOLE.print(f"Mismatched IST hyperparams (alpha={saved_alpha}, shift={saved_shift}). Needs re-compute IST")
+                    CONSOLE.print(
+                        f"Mismatched IST hyperparams (alpha={saved_alpha}, shift={saved_shift}). Needs re-compute IST"
+                    )
                     compute_ist = True
         else:
             compute_ist = True
@@ -197,11 +197,11 @@ class DyNeRF(DataParser):
                     CONSOLE.print(f"Computing IST of {aligned_image_paths[0,i].parent}")
                     imgs = torch.empty((num_frames, height, width, 3), dtype=torch.float32)
                     for j in range(num_frames):
-                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j,i])).astype(np.float32) / 255.)
+                        imgs[j] = torch.tensor(cv2.imread(str(aligned_image_paths[j, i])).astype(np.float32) / 255.0)
                     imgs = imgs.to(precompute_device)
 
                     max_diff = torch.zeros_like(imgs[0])
-                    for shift in range(1, ist_shift+1):
+                    for shift in range(1, ist_shift + 1):
                         shift_left = torch.cat([imgs[shift:], torch.zeros_like(imgs[:shift])], dim=0)
                         shift_right = torch.cat([torch.zeros_like(imgs[:shift]), imgs[:-shift]], dim=0)
                         mymax = torch.maximum(torch.abs_(shift_left - imgs), torch.abs_(shift_right - imgs))
