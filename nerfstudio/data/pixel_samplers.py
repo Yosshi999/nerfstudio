@@ -95,8 +95,10 @@ class PixelSampler:
             else:
                 importance = importance.view(-1)
                 indices = torch.stack(
-                    torch.meshgrid(torch.arange(num_images), torch.arange(image_height), torch.arange(image_width), indexing="ij"),
-                    -1
+                    torch.meshgrid(
+                        torch.arange(num_images), torch.arange(image_height), torch.arange(image_width), indexing="ij"
+                    ),
+                    -1,
                 ).view(-1, 3)
 
             weights = importance / importance.sum()
@@ -130,7 +132,9 @@ class PixelSampler:
             # sampling weight to the poles of the image than the equators.
             # TODO(kevinddchen): implement the correct mask-sampling method.
 
-            indices = self.sample_method(batch_size, num_images, image_height, image_width, mask=mask, importance=importance, device=device)
+            indices = self.sample_method(
+                batch_size, num_images, image_height, image_width, mask=mask, importance=importance, device=device
+            )
         else:
             # We sample theta uniformly in [0, 2*pi]
             # We sample phi in [0, pi] according to the PDF f(phi) = sin(phi) / 2.
@@ -165,11 +169,23 @@ class PixelSampler:
 
         if self.config.is_equirectangular:
             indices = self.sample_method_equirectangular(
-                num_rays_per_batch, num_images, image_height, image_width, mask=mask, importance=importance, device=device
+                num_rays_per_batch,
+                num_images,
+                image_height,
+                image_width,
+                mask=mask,
+                importance=importance,
+                device=device,
             )
         else:
             indices = self.sample_method(
-                num_rays_per_batch, num_images, image_height, image_width, mask=mask, importance=importance, device=device
+                num_rays_per_batch,
+                num_images,
+                image_height,
+                image_width,
+                mask=mask,
+                importance=importance,
+                device=device,
             )
 
         c, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
@@ -225,7 +241,9 @@ class PixelSampler:
                     num_rays_in_batch, 1, image_height, image_width, device=device, **sample_kwargs
                 )
             else:
-                indices = self.sample_method(num_rays_in_batch, 1, image_height, image_width, device=device, **sample_kwargs)
+                indices = self.sample_method(
+                    num_rays_in_batch, 1, image_height, image_width, device=device, **sample_kwargs
+                )
             indices[:, 0] = i
             all_indices.append(indices)
             all_images.append(batch["image"][i][indices[:, 1], indices[:, 2]])

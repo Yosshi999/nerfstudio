@@ -5,9 +5,23 @@ import multiprocessing
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (Any, Callable, Dict, ForwardRef, Generic, List, Literal,
-                    Optional, Sized, Tuple, Type, Union, cast, get_args,
-                    get_origin)
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    ForwardRef,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Sized,
+    Tuple,
+    Type,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 import h5py
 import torch
@@ -20,15 +34,15 @@ from nerfstudio.cameras.cameras import CameraType
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.configs.dataparser_configs import AnnotatedDataParserUnion
 from nerfstudio.data.datamanagers.base_datamanager import (
-    DataManager, TDataset, VanillaDataManagerConfig, variable_res_collate)
+    DataManager,
+    TDataset,
+    VanillaDataManagerConfig,
+    variable_res_collate,
+)
 from nerfstudio.data.dataparsers.base_dataparser import DataparserOutputs
-from nerfstudio.data.dataparsers.dynerf_dataparser import \
-    DyNeRFDataParserConfig
-from nerfstudio.data.pixel_samplers import (PatchPixelSamplerConfig,
-                                            PixelSampler, PixelSamplerConfig)
-from nerfstudio.data.utils.dataloaders import (CacheDataloader,
-                                               FixedIndicesEvalDataloader,
-                                               RandIndicesEvalDataloader)
+from nerfstudio.data.dataparsers.dynerf_dataparser import DyNeRFDataParserConfig
+from nerfstudio.data.pixel_samplers import PatchPixelSamplerConfig, PixelSampler, PixelSamplerConfig
+from nerfstudio.data.utils.dataloaders import CacheDataloader, FixedIndicesEvalDataloader, RandIndicesEvalDataloader
 from nerfstudio.data.utils.nerfstudio_collate import nerfstudio_collate
 from nerfstudio.model_components.ray_generators import RayGenerator
 from nerfstudio.utils.misc import get_dict_to_torch
@@ -67,7 +81,7 @@ class VideoDataloader(DataLoader):
         """Returns a list of batches from the dataset attribute."""
 
         assert isinstance(self.dataset, Sized)
-        frame_idx = random.randint(0, self.num_frames-1)
+        frame_idx = random.randint(0, self.num_frames - 1)
         # select num_cameras images at timestamp t
         indices = list(range(frame_idx * self.num_cameras, (frame_idx + 1) * self.num_cameras))
         batch_list = []
@@ -105,7 +119,6 @@ class VideoDataloader(DataLoader):
 
 @dataclass
 class DyNeRFDataManagerConfig(VanillaDataManagerConfig):
-
     _target: Type = field(default_factory=lambda: DyNeRFDataManager)
     """Target class to instantiate."""
     dataparser: AnnotatedDataParserUnion = DyNeRFDataParserConfig()
@@ -129,13 +142,13 @@ class DyNeRFDataManagerConfig(VanillaDataManagerConfig):
 
 class DyNeRFDataManager(DataManager, Generic[TDataset]):
     def __init__(
-            self,
-            config: DyNeRFDataManagerConfig,
-            device: Union[torch.device, str] = "cpu",
-            test_mode: Literal["test", "val", "inference"] = "val",
-            world_size: int = 1,
-            local_rank: int = 0,
-            **kwargs
+        self,
+        config: DyNeRFDataManagerConfig,
+        device: Union[torch.device, str] = "cpu",
+        test_mode: Literal["test", "val", "inference"] = "val",
+        world_size: int = 1,
+        local_rank: int = 0,
+        **kwargs,
     ):
         self.dataset_type: Type[TDataset] = kwargs.get("_dataset_type", getattr(TDataset, "__default__"))
         self.config = config
@@ -156,10 +169,14 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
         self.includes_time = self.dataparser.includes_time
         if test_mode != "inference":  # Avoid opening images in inference
             self.train_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split="train")
-            self.eval_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split=self.test_split)
-            self.train_num_frames, self.train_num_cameras = self.train_dataparser_outputs.metadata["shape_before_flatten"]
-            camera_heights = self.train_dataparser_outputs.cameras.height[:self.train_num_cameras, 0]
-            camera_widths = self.train_dataparser_outputs.cameras.width[:self.train_num_cameras, 0]
+            self.eval_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(
+                split=self.test_split
+            )
+            self.train_num_frames, self.train_num_cameras = self.train_dataparser_outputs.metadata[
+                "shape_before_flatten"
+            ]
+            camera_heights = self.train_dataparser_outputs.cameras.height[: self.train_num_cameras, 0]
+            camera_widths = self.train_dataparser_outputs.cameras.width[: self.train_num_cameras, 0]
             if len(camera_heights) > 1:
                 for height, width in zip(camera_heights[1:], camera_widths[1:]):
                     if camera_heights[0] != height or camera_widths[0] != width:
@@ -175,15 +192,23 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
                 self.exclude_batch_keys_from_device.remove("image")
             if self.config.importance_on_gpu is True:
                 self.exclude_batch_keys_from_device.remove("importance")
-            
+
             self.isg_cache = self.config.data / f"x{self.dataparser.downscale_factor}" / "isg_cache.h5"
             self.ist_cache = self.config.data / f"x{self.dataparser.downscale_factor}" / "ist_cache.h5"
             self.importance_mode: Literal["none", "isg", "ist"] = "none"
             if self.config.isg_step >= 0:
-                self.dataparser.precompute_isg(self.isg_cache, self.train_dataparser_outputs, self.config.isg_gamma, self.config.precompute_device)
+                self.dataparser.precompute_isg(
+                    self.isg_cache, self.train_dataparser_outputs, self.config.isg_gamma, self.config.precompute_device
+                )
                 self.isg_cache_f = h5py.File(self.isg_cache)
             if self.config.ist_step >= 0:
-                self.dataparser.precompute_ist(self.ist_cache, self.train_dataparser_outputs, self.config.ist_alpha, self.config.ist_shift, self.config.precompute_device)
+                self.dataparser.precompute_ist(
+                    self.ist_cache,
+                    self.train_dataparser_outputs,
+                    self.config.ist_alpha,
+                    self.config.ist_shift,
+                    self.config.precompute_device,
+                )
                 self.ist_cache_f = h5py.File(self.ist_cache)
         super().__init__()
 
@@ -272,14 +297,18 @@ class DyNeRFDataManager(DataManager, Generic[TDataset]):
         frame_idx = image_batch["frame_idx"]
         # TODO: support importance weights for camera_res_scale_factor < 1.0
         if self.importance_mode == "isg":
-            importance_weights = torch.empty(self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2])
+            importance_weights = torch.empty(
+                self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2]
+            )
             for camera in range(self.train_num_cameras):
                 importance_weights[camera] = torch.from_numpy(self.isg_cache_f[f"weights/{camera}"][frame_idx])
             importance_weights = torch.tensor(importance_weights)
             importance_weights /= importance_weights.sum()
             image_batch["importance"] = importance_weights
         elif self.importance_mode == "isg":
-            importance_weights = torch.empty(self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2])
+            importance_weights = torch.empty(
+                self.train_num_cameras, image_batch["image"].shape[1], image_batch["image"].shape[2]
+            )
             for camera in range(self.train_num_cameras):
                 importance_weights[camera] = torch.from_numpy(self.ist_cache_f[f"weights/{camera}"][frame_idx])
             importance_weights = torch.tensor(importance_weights)
