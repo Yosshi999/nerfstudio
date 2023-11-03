@@ -1,3 +1,21 @@
+# Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Datamanager for Neural 3D Video Synthesis Dataset.
+"""
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -5,23 +23,7 @@ import multiprocessing
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    ForwardRef,
-    Generic,
-    List,
-    Literal,
-    Optional,
-    Sized,
-    Tuple,
-    Type,
-    Union,
-    cast,
-    get_args,
-    get_origin,
-)
+from typing import Any, Callable, Dict, Generic, List, Literal, Optional, Sized, Tuple, Type, Union
 
 import h5py
 import torch
@@ -137,7 +139,7 @@ class DyNeRFDataManagerConfig(VanillaDataManagerConfig):
     isg_step: int = 0
     """Steps before starting to use ISG weights. -1 to disable."""
     ist_step: int = 250000
-    """Steps before starting to use IST weights. -1 to disable"""
+    """Steps before starting to use IST weights. -1 to disable."""
 
 
 class DyNeRFDataManager(DataManager, Generic[TDataset]):
